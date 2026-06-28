@@ -25,10 +25,10 @@ Worker (fetch)  ← HTTP Upgradeを受けてDO stubに委譲して即終了
 
 ```bash
 # ビルド
-go build ./...
+go build .
 
 # ローカル実行（設定ファイルを指定）
-CONFIG_FILE=./example/config.sample.jsonc go run ./...
+CONFIG_FILE=./example/config.sample.jsonc go run .
 
 # Dockerイメージビルド（リポジトリルートから実行）
 docker build -t conduit .

@@ -5,7 +5,7 @@ A Go relay that maintains Discord Gateway WebSocket connections on any always-on
 ## Setup
 
 ```bash
-go build ./...
+go build .
 CONFIG_FILE=/etc/conduit/config.json ./conduit
 ```
 

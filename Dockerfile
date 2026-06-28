@@ -8,7 +8,7 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY --exclude=docs/ --exclude=example/ . .
-RUN CGO_ENABLED=0 GOOS=linux go build -o /conduit ./main.go
+RUN CGO_ENABLED=0 GOOS=linux go build -o /conduit .
 
 # Runtime stage
 FROM scratch
