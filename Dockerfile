@@ -7,7 +7,7 @@ WORKDIR /build
 COPY go.mod go.sum ./
 RUN go mod download
 
-COPY main.go ./main.go
+COPY --exclude=docs/ --exclude=example/ . .
 RUN CGO_ENABLED=0 GOOS=linux go build -o /conduit ./...
 
 # Runtime stage
