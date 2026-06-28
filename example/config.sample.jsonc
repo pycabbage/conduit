@@ -1,0 +1,52 @@
+// Bot configuration sample for conduit.
+// Place this file on the conduit server (default path: /etc/conduit/config.json).
+// Send SIGHUP to reload the configuration; bots are started or stopped based on the diff (kill -HUP <pid>).
+// This file uses JSONC (JSON with Comments) format.
+// conduit parses JSONC natively, so comments can be left in place.
+[
+  // --- Active bots ---
+  {
+    // Arbitrary string that uniquely identifies this bot.
+    // Used as the /gateway/{id} path on the Worker and as the DO ID.
+    "id": "my-bot",
+
+    // Discord bot token (including the "Bot " prefix).
+    "token": "Bot MMMMMMMMMMMMMMMMMMMMMMMM.XXXXXX.YYYYYYYYYYYYYYYYYYYYYYYYYYYY",
+
+    // Only bots with "active" status are kept connected by conduit.
+    // Setting "paused" disconnects the bot but preserves the config entry.
+    "status": "active",
+
+    // WebSocket URL of the Worker that receives forwarded events (/gateway endpoint).
+    "worker_ws_url": "wss://my-worker.my-subdomain.workers.dev/gateway",
+
+    // Gateway Intents as a bitfield (integer).
+    // Common values (combine with bitwise OR):
+    //   GUILDS            =      1  (0x0001)
+    //   GUILD_MEMBERS     =      2  (0x0002) *privileged*
+    //   GUILD_MESSAGES    =    512  (0x0200)
+    //   MESSAGE_CONTENT   =  32768  (0x8000) *privileged*
+    //
+    // Examples: GUILDS + GUILD_MESSAGES = 513
+    //           GUILDS + GUILD_MESSAGES + MESSAGE_CONTENT = 33281
+    "intents": 33281
+  },
+
+  // --- Another bot (without message content intent) ---
+  {
+    "id": "my-other-bot",
+    "token": "Bot AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "status": "active",
+    "worker_ws_url": "wss://other-worker.my-subdomain.workers.dev/gateway",
+    "intents": 513 // GUILDS + GUILD_MESSAGES only
+  },
+
+  // --- Paused bot (keeps config entry but drops the connection) ---
+  {
+    "id": "maintenance-bot",
+    "token": "Bot BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+    "status": "paused", // "paused" -> conduit will not establish a connection for this bot
+    "worker_ws_url": "wss://my-worker.my-subdomain.workers.dev/gateway",
+    "intents": 513
+  }
+]

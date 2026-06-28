@@ -1,0 +1,39 @@
+// For format details, see https://aka.ms/devcontainer.json. For config options, see the
+// README at: https://github.com/devcontainers/templates/tree/main/src/ubuntu
+{
+  "name": "conduit",
+  "image": "mcr.microsoft.com/devcontainers/base:resolute",
+  "features": {
+    "ghcr.io/devcontainers/features/go:1": {},
+    "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {
+      "moby": false
+    }
+  },
+  "postCreateCommand": ".devcontainer/postCreate.sh",
+  "mounts": [
+    {
+      "type": "bind",
+      "source": "${localEnv:HOME}/.ssh",
+      "target": "/home/vscode/.ssh"
+    },
+    {
+      "type": "volume",
+      "source": "devcontainer-claude-data",
+      "target": "/home/vscode/.claude"
+    },
+    {
+      "type": "volume",
+      "source": "devcontainer-node_modules",
+      "target": "${containerWorkspaceFolder}/example/sample-worker/node_modules"
+    }
+  ],
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "golang.go",
+        "Anthropic.claude-code",
+        "github.vscode-github-actions"
+      ]
+    }
+  }
+}
