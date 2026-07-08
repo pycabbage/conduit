@@ -15,7 +15,10 @@ Worker (fetch)  ← HTTP Upgradeを受けてDO stubに委譲して即終了
     → DO        ← Hibernation APIを使用。イベント受信時のみ起動
 ```
 
-- **main.go** 一枚。Bot設定ファイルを読んで各BotのgoroutineをSIGHUPトリガーで差分管理する
+- Bot設定ファイルを読んで各BotのgoroutineをSIGHUP（またはJS API経由）トリガーで差分管理する。中核ロジックは `internal/relay`（`Manager`, `BotConfig`, Discord Gateway ↔ Worker中継ループ）に切り出されており、プラットフォーム固有のエントリポイントは `cmd/conduit/` に同居し、それぞれビルドタグで分離されている（native/js向けを別ディレクトリに分けると、片方のGOOS向けビルド時にもう一方のディレクトリが「ビルド対象ファイル0個のパッケージ」になりgoreleaserのビルドが壊れるため、同一ディレクトリに置く設計）:
+  - `cmd/conduit/main.go`（`//go:build !js`）: ネイティブCLI。`os/signal`でSIGHUP/SIGTERM/SIGINTを処理
+  - `cmd/conduit/main_js.go`（`//go:build js`）: `GOOS=js GOARCH=wasm`向け。`syscall/js`で`start`/`reload`/`stop`をグローバル関数としてエクスポートし、`select{}`で常駐する（js/wasmにはシグナル配送機構がないため`os/signal`は使わない）
+- **`packages/conduit-relay/`**: 上記wasmビルドをNode.js向けnpmパッケージとして配布。`npx conduit-relay`でのCLI起動と、`start`/`stop`/`reload`関数のライブラリ利用の両方に対応（詳細は `packages/conduit-relay/README.md`）
 - **example/sample-worker/src/index.ts** 一枚。Worker（薄いWSルーター）とConduitDO（Hibernation APIサーバー）を同居させたサンプル
 - WS接続確立直後にconduitがinitメッセージ（`{"type":"init","token":"Bot ..."}`）を送りDOが`ctx.storage`に保存する（事前設定不要）
 
@@ -24,11 +27,14 @@ Worker (fetch)  ← HTTP Upgradeを受けてDO stubに委譲して即終了
 ## conduit（Go）
 
 ```bash
-# ビルド
-go build .
+# ビルド（ネイティブ）
+go build ./cmd/conduit
 
 # ローカル実行（設定ファイルを指定）
-CONFIG_FILE=./example/config.sample.jsonc go run .
+CONFIG_FILE=./example/config.sample.jsonc go run ./cmd/conduit
+
+# wasmビルド確認（GOOS=js GOARCH=wasm）
+GOOS=js GOARCH=wasm go build ./cmd/conduit
 
 # Dockerイメージビルド（リポジトリルートから実行）
 docker build -t conduit .
@@ -37,7 +43,24 @@ docker build -t conduit .
 kill -HUP <pid>
 ```
 
-`main.go` の依存パッケージは `github.com/coder/websocket` のみ。
+依存パッケージは `github.com/coder/websocket` のみ（`internal/relay`・`cmd/conduit/main.go`・`cmd/conduit/main_js.go`共通）。
+
+## packages/conduit-relay（Node.js / npm）
+
+TypeScript・ESM・`src/`レイアウト。ビルドは`scripts/build.sh`（シェルスクリプト）。
+
+```bash
+cd packages/conduit-relay
+
+bash scripts/build.sh   # dist/conduit.wasm, dist/wasm_exec.js, dist/*.js, dist/*.d.ts を生成（要ローカルGoツールチェインとBun）
+```
+
+- `src/cli.ts`: `npx conduit-relay`のCLIエントリポイント（ビルド後は`dist/cli.js`）。`CONFIG_FILE`環境変数とSIGHUP/SIGTERM/SIGINTがネイティブ版と同じ挙動
+- `src/index.ts`: ライブラリ利用向け。`start`/`stop`/`reload`をexport（シグナルハンドラは登録しない、ビルド後は`dist/index.js`）
+- `src/load.ts`: Node向け自前wasmローダー（stockの`wasm_exec_node.js`は常駐用途と噛み合わないため使用しない）。`wasm_exec.js`/`conduit.wasm`はビルド成果物でソースに存在しないため、`new URL(...)`による実行時のcomputed URL経由で解決する
+- `scripts/build.sh`: `bun tsc`によるTSコンパイル→`GOOS=js GOARCH=wasm go build ./cmd/conduit`でのwasmビルド→`wasm_exec.js`のvendoringを行う
+- Node.js v22以上が必要（Discord GatewayへのoutgoingWS接続にブラウザ互換のグローバル`WebSocket`を使うため）
+- 設計判断の詳細は `docs/adr/0006`〜`0008`を参照
 
 ## example/sample-worker（TypeScript / Cloudflare Workers）
 

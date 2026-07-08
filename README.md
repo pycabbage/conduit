@@ -5,11 +5,32 @@ A Go relay that maintains Discord Gateway WebSocket connections on any always-on
 ## Setup
 
 ```bash
-go build .
+go build ./cmd/conduit
 CONFIG_FILE=/etc/conduit/config.json ./conduit
 ```
 
 See [`example/config.sample.jsonc`](example/config.sample.jsonc) for the configuration format.
+
+## npm / npx (Node.js)
+
+conduit's core relay logic is also compiled to WebAssembly (`GOOS=js GOARCH=wasm`) and published for Node.js as [`packages/conduit-relay`](packages/conduit-relay), usable both as a CLI and as a library. This is the same relay loop as the native binary above -- just a different entrypoint (see `cmd/conduit/main.go` vs `cmd/conduit/main_js.go`).
+
+```bash
+cd packages/conduit-relay
+bash scripts/build.sh   # builds dist/conduit.wasm, dist/*.js, dist/*.d.ts (requires a local Go toolchain and Bun)
+
+CONFIG_FILE=/etc/conduit/config.json npx conduit-relay
+```
+
+```js
+import { start, stop, reload } from 'conduit-relay';
+
+await start(configArrayOrJSONCString);
+await reload(updatedConfig);
+await stop();
+```
+
+Requires Node.js >= 22 (for the stable global `WebSocket` client conduit's outgoing Gateway/Worker connections rely on). See [`packages/conduit-relay/README.md`](packages/conduit-relay/README.md) for details.
 
 <details>
 <summary>Core Concepts</summary>

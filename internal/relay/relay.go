@@ -1,18 +1,16 @@
-package main
+// Package relay is the platform-independent core of conduit: the Discord
+// Gateway <-> Worker relay loop and the Manager that runs it.
+package relay
 
 import (
 	"context"
 	"encoding/json"
 	"log"
-	"os"
-	"os/signal"
 	"strconv"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/coder/websocket"
-	"github.com/pycabbage/conduit/internal/jsonc"
 )
 
 type BotConfig struct {
@@ -26,69 +24,6 @@ type BotConfig struct {
 type sessInfo struct {
 	id, resumeURL string
 	seq           *int
-}
-
-func main() {
-	configFile := os.Getenv("CONFIG_FILE")
-	if configFile == "" {
-		configFile = "/etc/conduit/config.json"
-	}
-	running := map[string]context.CancelFunc{}
-	applyConfigs := func() {
-		data, err := os.ReadFile(configFile)
-		if err != nil {
-			log.Printf("config read: %v", err)
-			return
-		}
-		var cfgs []BotConfig
-		if err := json.Unmarshal(jsonc.ToJSON(data), &cfgs); err != nil {
-			log.Printf("config parse: %v", err)
-			return
-		}
-
-		desired := map[string]BotConfig{}
-		for _, c := range cfgs {
-			if c.Status == "active" {
-				desired[c.ID] = c
-			}
-		}
-		for id, cancel := range running {
-			if _, ok := desired[id]; !ok {
-				cancel()
-				delete(running, id)
-				log.Printf("stopped bot %s", id)
-			}
-		}
-		for id, cfg := range desired {
-			if _, ok := running[id]; !ok {
-				ctx, cancel := context.WithCancel(context.Background())
-				running[id] = cancel
-				log.Printf("starting bot %s", id)
-				go botRun(ctx, cfg)
-			}
-		}
-	}
-
-	applyConfigs()
-
-	sighup := make(chan os.Signal, 1)
-	signal.Notify(sighup, syscall.SIGHUP)
-	sigterm := make(chan os.Signal, 1)
-	signal.Notify(sigterm, syscall.SIGTERM, syscall.SIGINT)
-
-	for {
-		select {
-		case <-sighup:
-			log.Print("SIGHUP: reloading config")
-			applyConfigs()
-		case <-sigterm:
-			for id, cancel := range running {
-				cancel()
-				log.Printf("stopped bot %s", id)
-			}
-			return
-		}
-	}
 }
 
 func botRun(ctx context.Context, cfg BotConfig) {
