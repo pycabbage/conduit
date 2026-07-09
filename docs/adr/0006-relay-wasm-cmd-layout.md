@@ -1,7 +1,7 @@
 ---
 title: "conduitをWebAssembly化しnpmで配布する"
 date: "2026-07-08"
-status: "Accepted"
+status: "Superseded by 0009"
 ---
 
 # 0006. conduitをWebAssembly化しnpmで配布する

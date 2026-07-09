@@ -1,7 +1,7 @@
 ---
 title: "wasm版はシグナルではなくJS関数でライフサイクル制御する"
 date: "2026-07-08"
-status: "Accepted"
+status: "Superseded by 0009"
 ---
 
 # 0007. wasm版はシグナルではなくJS関数でライフサイクル制御する

@@ -13,11 +13,11 @@ See [`example/config.sample.jsonc`](example/config.sample.jsonc) for the configu
 
 ## npm / npx (Node.js)
 
-conduit's core relay logic is also compiled to WebAssembly (`GOOS=js GOARCH=wasm`) and published for Node.js as [`packages/conduit-relay`](packages/conduit-relay), usable both as a CLI and as a library. This is the same relay loop as the native binary above -- just a different entrypoint (see `cmd/conduit/main.go` vs `cmd/conduit/main_js.go`).
+conduit's core relay logic is also built as a native Node.js addon (`.node`) and published for Node.js as [`packages/conduit-relay`](packages/conduit-relay), usable both as a CLI and as a library. This is the same relay loop as the native binary above -- just a different entrypoint (see `cmd/conduit/main.go` vs `cmd/conduit/main_napi.go`).
 
 ```bash
 cd packages/conduit-relay
-bash scripts/build.sh   # builds dist/conduit.wasm, dist/*.js, dist/*.d.ts (requires a local Go toolchain and Bun)
+bash scripts/build.sh   # builds dist/conduit.node, dist/*.js, dist/*.d.ts (requires a local Go toolchain and Bun)
 
 CONFIG_FILE=/etc/conduit/config.json npx conduit-relay
 ```

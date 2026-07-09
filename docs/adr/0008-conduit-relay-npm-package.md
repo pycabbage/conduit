@@ -1,7 +1,7 @@
 ---
 title: "conduit-relay npmパッケージの実装方式"
 date: "2026-07-08"
-status: "Accepted"
+status: "Superseded by 0009"
 ---
 
 # 0008. conduit-relay npmパッケージの実装方式

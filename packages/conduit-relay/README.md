@@ -1,8 +1,8 @@
 # conduit-relay
 
 [`conduit`](../../README.md)（Discord Gateway <-> Cloudflare Workers relay）を
-WebAssembly化し、Node.js向けに配布するnpmパッケージ。CLI（`npx conduit-relay`）と
-ライブラリ（`start`/`stop`/`reload`）の両方で使える。
+native Node.jsアドオン（`.node`）としてビルドし、Node.js向けに配布するnpmパッケージ。
+CLI（`npx conduit-relay`）とライブラリ（`start`/`stop`/`reload`）の両方で使える。
 
 ## Build
 
@@ -23,13 +23,14 @@ CONFIG_FILE=/etc/conduit/config.json npx conduit-relay
 ## Library
 
 ```js
-import { start, stop, reload } from 'conduit-relay';
+import { start } from 'conduit-relay';
 
-await start(configArrayOrJSONCString);
-await reload(updatedConfig);
-await stop();
+const relay = await start(configArrayOrJSONCString);
+await relay.reload(updatedConfig);
+await relay.stop();
 ```
 
 設計判断の詳細は [`docs/adr/0006`](../../docs/adr/0006-relay-wasm-cmd-layout.md)・
 [`0007`](../../docs/adr/0007-wasm-lifecycle-without-signals.md)・
-[`0008`](../../docs/adr/0008-conduit-relay-npm-package.md) を参照。
+[`0008`](../../docs/adr/0008-conduit-relay-npm-package.md)（いずれもSuperseded）・
+[`0009`](../../docs/adr/0009-native-napi-addon-instead-of-wasm.md) を参照。
