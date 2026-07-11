@@ -7,8 +7,6 @@
 *.dll
 *.so
 *.dylib
-# Native Node-API addons (conduit-relay build artifact)
-*.node
 
 # Test binary, built with `go test -c`
 *.test

@@ -1,7 +1,7 @@
 ---
 title: "conduit-relayをwasmではなくnative Node-APIアドオンとして実装する"
 date: "2026-07-09"
-status: "Accepted"
+status: "Superseded by 0010"
 ---
 
 # 0009. conduit-relayをwasmではなくnative Node-APIアドオンとして実装する
