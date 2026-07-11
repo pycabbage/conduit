@@ -176,6 +176,109 @@ conduit-relayのランタイム実装を、wasmビルドからNode-API準拠の�
 反映済み）。`internal/relay`のロジックはどちらの経路でも共通なので、
 両者で挙動が分岐する心配はない。
 
+### 方針転換2: NAPI shimとCLIをpure Cへ分離する（1プロセス1 Goランタイム）
+
+上記「別々のGo成果物」設計（`main.go`をタグなしでビルドしたネイティブCLI
+バイナリ + `main_napi.go`を`-buildmode=c-shared -tags=napi`でビルドした
+`.node`アドオンの2成果物、いずれも`internal/relay`を直接importしてGoの
+コードとして完結）は、実装後にユーザーが`./dist/conduit.linux-x64.node`を
+直接実行したところsegfaultすることが発覚し、破綻していると判明した。
+
+**原因（実機検証済み）**: `-buildmode=c-shared`が生成するELFには
+エントリポイント/`PT_INTERP`が無く、カーネルローダーがそれを直接
+execしようとするとクラッシュする。逆に`-buildmode=pie`にすればエントリ
+ポイント/`PT_INTERP`が付き直接実行可能になるが、今度はBunの`require()`が
+`dlopen`で失敗する（`ERR_DLOPEN_FAILED: cannot dynamically load
+position-independent executable`）。glibcの動的ローダーはPIE実行体の
+dlopenを拒否するため。つまり**「直接execできる」ことと「dlopenできる」
+ことは、Linux上の1つのELFファイルでは両立しない**。「CLIとライブラリで
+別々のGo成果物を使う」という上記の方針転換は、この問題を「1つのGo
+成果物をrequireとexecの両方に使う」という壊れた構成のまま放置していた
+ことになる。
+
+**新しい設計**: Go成果物を1つだけに絞り、Node-API依存のNode-APIグルー層
+とCLIのシグナル処理層をpure C（Goランタイムを持たない）に切り出す。
+
+- **`cmd/conduit/main_core.go`（唯一のGo成果物）**: `//go:build core`。
+  `node_api.h`への依存を一切持たない、汎用のフラットなC ABI
+  （`ConduitStart`/`ConduitStop`/`ConduitReload`、いずれも`*C.char`の
+  プレーンなC文字列で入出力する）を`//export`する。`-buildmode=c-shared`
+  で`libconduitcore.so`（+副産物の`libconduitcore.h`）としてビルドする。
+  `internal/relay`がこのnpmパッケージ向けに機械語へコンパイルされる場所は
+  ここだけになる。
+- **`packages/conduit-relay/native/napi_shim.c`（pure C、Goなし）**:
+  `node_api.h`を直接includeし、`libconduitcore.so`の上記C ABIを呼ぶだけの
+  Node-APIグルー。`gcc -shared -fPIC`でビルドし、これが`require()`される
+  唯一のファイル（`conduit.${platform}-${arch}.node`）になる。直接execする
+  ことは想定しない。
+- **`packages/conduit-relay/native/cli.c`（pure C、Goなし）**: 旧
+  `cmd/conduit/main.go`のCONFIG_FILE読込・SIGHUP/SIGTERM/SIGINT処理を
+  Cで再現し、`libconduitcore.so`の同じC ABIを呼ぶ。`gcc`で通常の実行可能
+  ファイル（`conduit.${platform}-${arch}`、拡張子なし）としてビルドする。
+  これが`cli.ts`が`spawn`する唯一のファイルであり、require()されることは
+  想定しない。
+- 両C成果物は`-Wl,-rpath,$ORIGIN`で`libconduitcore.so`を動的リンクし、
+  3ファイルとも`dist/`に同居することで実行時に解決できる。
+
+**pure Cでなければならない理由（Goにしてはいけない理由）**: `-buildmode=
+c-shared`でビルドしたGo成果物は、それをロードしたプロセスに専用の
+Goランタイム（goroutineスケジューラ・GC・OSスレッド）を1つ埋め込む。
+napi shimやCLI実行体も**Go**でビルドして`libconduitcore.so`にリンクして
+しまうと、1プロセスに独立した2つのGoランタイムが共存する構成になる。
+これは未検証かつ不必要な構成である。そもそもこのADR全体の
+native方式採用の前提（「バックグラウンドgoroutineがホストのアイドル中も
+自律的に進行し続ける」= residency）は、**プロセスに埋め込まれたGo
+ランタイムが1つだけ**という条件下で実機検証したものであり、この前提を
+崩さないために、shim/CLI側は常にpure Cで書く。
+
+**本redesignのための実機検証（toy prototype、上記wasip1/native比較と
+同様の位置付けで記録）**:
+
+- (a) バックグラウンドgoroutineでカウンタを進めるだけの最小Go
+  `c-shared`ライブラリを、`gcc`+`-Wl,-rpath,'$ORIGIN'`でpure Cの実行可能
+  ファイルにリンクした。直接実行してsegfaultしないこと（正しい
+  エントリポイント/`PT_INTERP`を持つこと）、およびホストアイドル1秒間に
+  カウンタが正しく進行すること（residency維持）を確認した。
+- (b) 上記実行可能ファイルにSIGHUPハンドラを追加し、ハンドラから
+  Goがexportした関数を正しく呼び出せることを確認した。
+- (c) 同じcoreライブラリに対するpure C・GoゼロのNode-API shim
+  （`node_api.h`のみに依存）をBun 1.3.13から`require()`し、成功すること、
+  かつJS側の500msアイドル中もカウンタが正しく進行すること（residency
+  維持）を確認した。
+- 上記いずれもクラッシュなし・residency維持・シグナルからGo関数呼び出しへ
+  の到達を確認済み。
+
+**サイズ測定と3成果物設計を選んだ理由**: Node-API依存のみでrelayロジックを
+含まない最小Go `c-shared`ビルドはstrip後約1.38MB。これに対し、
+`internal/relay` + `coder/websocket`とそのTLS/HTTP/JSON依存閉包を静的
+リンクした（旧設計の）フルアドオンはstrip後約7.1MB。旧「別々のGo成果物」
+設計では、この重量級の部分（約5.7MB）がCLIバイナリと`.node`アドオンの
+両方に重複して埋め込まれていた。新設計はGo成果物を1つに絞ることで、この
+重複をほぼ解消する（旧「2 Go成果物」設計に対して概ね50%のサイズ削減）。
+
+**C文字列の所有権契約（生C ABI）**: `ConduitStart`/`ConduitReload`は
+成功時に`NULL`を返す（空文字列を`C.CString("")`で確保するアロケーション
+コストを成功パスで払わないため、`NULL`を成功センチネルとする）。失敗時は
+`C.CString(err.Error())`でmallocされた文字列を返し、**呼び出し側
+（`napi_shim.c`/`cli.c`）がfreeする責務を持つ**。これはJSから見える
+`conduit.start()`の契約（成功時`""`、失敗時エラー文字列、README記載の
+「成功時は空文字列」）とは異なるセンチネルであり、この変換は`napi_shim.c`
+の`conduit_result`が担う（`NULL`→JSの`""`、非`NULL`→JS文字列化して
+`free()`）。生C ABIと、JSに見せる契約を意図的に分離した設計である。
+
+**`libconduitcore.h`の位置付け（旧ADRの判断を上書き）**: 旧設計では
+`.h`（`go build -buildmode=c-shared`の副産物）を「Node-APIモジュールは
+`require()`でロードするだけなので不要」として`dist/`から削除していた
+（この判断自体は旧設計では正しかった。旧`main_napi.go`はNode-APIの
+シンボルを直接exportしており、Cヘッダー経由で他のCコードから呼ばれる
+ことは無かったため）。新設計では`napi_shim.c`・`cli.c`の両方が
+`libconduitcore.h`（`ConduitStart`/`ConduitStop`/`ConduitReload`の
+シグネチャ）を`#include`してビルドされるため、**`libconduitcore.h`は
+正真正銘のビルド時依存になった**。ただしビルド後は`dist/`から削除し、
+npmパッケージには同梱しない（実行時に必要になることはない。3成果物は
+すべて`libconduitcore.so`にリンク済みで、ヘッダーはコンパイル時にしか
+要らない）。
+
 #### `src/index.ts`の実装詳細
 
 `.node`はビルド成果物であり、ソースには存在しない。CommonJSのネイティブ
@@ -187,8 +290,11 @@ import.meta.url)`）で解決する。これは著者時点ではアーティフ
 
 exportする`conduit`の型（`ConduitAddon`）は`start`/`reload`が成功時に
 空文字列、失敗時にエラーメッセージ文字列を返し、`stop`は`undefined`を
-返す、という`main_napi.go`の契約をそのまま表す。例外による失敗通知は
-行わないため、呼び出し側で戻り値を見て判断する必要がある
+返す、という`native/napi_shim.c`の契約をそのまま表す（`libconduitcore.so`
+の生C ABIは`NULL`/malloc済みエラー文字列というセンチネルだが、
+`napi_shim.c`がJS向けに`""`/文字列へ変換する。詳細は上記「方針転換2」の
+C文字列所有権契約を参照）。例外による失敗通知は行わないため、呼び出し側で
+戻り値を見て判断する必要がある
 （`const err = conduit.start(cfg); if (err) throw new Error(err)`）。
 
 #### `src/cli.ts`の実装詳細（シグナル転送の設計理由）
@@ -218,59 +324,110 @@ graceful shutdown完了前に親（Node.jsプロセス）が終了してしま�
 親（Node.js）・子（ネイティブバイナリ）とも0.3秒以内に正常終了し、
 孤児化は発生しないことを確認した。
 
-#### `cmd/conduit/main_napi.go`の実装詳細
+上記の実機検証は「方針転換2」で3成果物split前、`spawn`先が
+`cmd/conduit/main.go`をタグなしでビルドした実行体だった時点のものである。
+`spawn`先を差し替える`cli.ts`側の設計（シグナル転送の理由・二重配送への
+対応）自体は変わらず有効だが、シグナルを受け取る側の実装は
+`packages/conduit-relay/native/cli.c`（pure C、下記）に置き換わっており、
+SIGHUP→SIGHUP→SIGTERMのような複数シグナルの連続配送に対する再検証が
+必要（「起床後に確認すべきこと」参照）。
 
-**ビルド**: `-buildmode=c-shared -tags=napi`でビルドする（Node-API公式
-ヘッダー`node_api.h`はcgoで直接インクルードする）。
+#### `cmd/conduit/main_core.go`・`native/napi_shim.c`・`native/cli.c`の実装詳細
+
+**ビルド**: `main_core.go`は`-buildmode=c-shared -tags=core`でビルドする。
+`node_api.h`への依存が無いため、`CGO_CFLAGS`でNode-APIヘッダーの
+includeパスを渡す必要は無い（`CGO_ENABLED=1`のみで十分）。
 
 ```
 CGO_ENABLED=1 \
-CGO_CFLAGS="-I/path/to/node-api-headers/include" \
-go build -tags=napi -buildmode=c-shared -o conduit.node ./cmd/conduit
+go build -tags=core -buildmode=c-shared \
+  -o libconduitcore.so ./cmd/conduit
 ```
 
-`node_api.h`のインクルードパスは`CGO_CFLAGS`で外部から渡す前提であり、
-ソースやコミット済みのビルドスクリプトに環境固有パス（探索時に使った
+`native/napi_shim.c`・`native/cli.c`は`gcc`で直接ビルドする（`go build`は
+使わない）。いずれも`libconduitcore.h`（`libconduitcore.so`ビルドの副産物）
+を`#include`し、`-L. -lconduitcore -Wl,-rpath,$ORIGIN`で
+`libconduitcore.so`を動的リンクする。`napi_shim.c`は
+`gcc -shared -fPIC`（Node-APIヘッダーのincludeパスを`-I`で追加）、
+`cli.c`は通常の実行可能ファイルとしてビルドする（特別な`-buildmode`
+相当のフラグは不要）。3ファイルとも`dist/`に同居させることで、
+実行時に`$ORIGIN`（=自分自身のディレクトリ）から`libconduitcore.so`を
+解決できる。
+
+`node_api.h`のインクルードパスは`CGO_CFLAGS`（`napi_shim.c`をビルドする
+`gcc`呼び出しには`-I`）で外部から渡す前提であり、ソースやコミット済みの
+ビルドスクリプトに環境固有パス（探索時に使った
 `/nix/store/.../nodejs-slim-24.16.0/include/node`等）をハードコードしては
 ならない（`node-api-headers` npmパッケージやNode.jsインストールの
 includeディレクトリを指すこと）。
 
-**`relay.Manager`のラップ**: `main.go`（ネイティブCLI）が使う
-`relay.Manager`（`NewManager`/`Apply`/`StopAll`）をそのまま使い、
-エントリポイントだけを差し替える。共有ライブラリは実OSスレッド上で動くため、
-`net.Dial`・`coder/websocket`のブロッキングRead・goroutineスケジューリングは
-（wasmビルドと異なり）無改修で動作する。
+**`relay.Manager`のラップ（`main_core.go`）**: `main.go`（ネイティブCLI、
+`//go:build !core`）が使う`relay.Manager`（`NewManager`/`Apply`/
+`StopAll`）をそのまま使い、エントリポイントだけを差し替える。共有
+ライブラリは実OSスレッド上で動くため、`net.Dial`・`coder/websocket`の
+ブロッキングRead・goroutineスケジューリングは（wasmビルドと異なり）
+無改修で動作する。`main_core.go`は`node_api.h`も`napi_env`/`napi_value`も
+一切参照しない、生の`*C.char`だけを扱う汎用C ABIである。旧
+`main_napi.go`にあったcgo preamble内の`static` Cヘルパー（後述）は
+Node-API固有のものだったため不要になり、`main_core.go`のcgo preambleは
+空（`import "C"`の直前にpreambleコメント自体が無い）。
 
-**cgo previewの構造**: `//export`で公開するGo関数（`conduitStart`,
-`conduitStop`, `conduitReload`）は、cgoのpreamble内では定義せず前方宣言のみ
-にする（`//export`を使うファイルのpreambleは宣言のみである必要がある
-制約による）。`conduit_define`（`napi_create_function`+
-`napi_set_named_property`で1つのJS関数を`exports`に登録する）と
-`conduit_define_all`（start/stop/reloadを登録する）はpreamble内の`static`
-なCヘルパー関数として定義する（`static`は内部リンケージなので、cgoの
-前方宣言と衝突しない）。`napi_create_function`はC関数ポインタを要求し、
-Goの`//export`シンボルのアドレスをCから取る必要があるため、この
-ヘルパーが必要になる。
+**`ConduitStart`/`ConduitReload`が返すポインタの契約**: 成功時は`NULL`
+（呼び出し側でのfree不要）、失敗時は`C.CString(err.Error())`（呼び出し側
+＝`napi_shim.c`/`cli.c`が`free()`する責務を持つ）。旧`main_napi.go`の
+`conduitStart`/`conduitReload`が返していた「成功時は空文字列」は
+JS向けの契約であり、`main_core.go`の生C ABIでは`NULL`センチネルに
+置き換わった（詳細は上記「方針転換2」のC文字列所有権契約を参照）。
 
-**ヘルパー関数**:
-- `jsUndefined`: JSの`undefined`を返す（voidを返すコールバックの戻り値に
-  使う）。呼び出しが失敗したら`NULL`にフォールバックする（Node側では
-  `NULL`も`undefined`として扱われる）。
-- `jsString`: GoのstringからJS文字列を作る。
-- `firstStringArg`: コールバックの第1引数をUTF-8文字列として読む。
+**`native/napi_shim.c`の構造**: `node_api.h`のみをinclude
+する（`libconduitcore.h`は`ConduitStart`等のシグネチャを得るため
+別途include）。旧`main_napi.go`のcgo preambleにあった`static`な
+Cヘルパー（`conduit_define`/`conduit_define_all`、`napi_create_function`
+がC関数ポインタを要求するためGoの`//export`シンボルをcgo preamble内の
+Cヘルパー経由で登録する必要があった）は、pure Cになったことで
+その制約自体が消え、`napi_shim.c`内で直接`napi_create_function`を
+呼ぶだけで済む（`conduit_define`はコード重複を避けるための単なる
+ローカルヘルパーとして残すが、cgoの前方宣言制約に起因するものではない）。
+モジュール初期化は`node_api.h`が提供する`NAPI_MODULE_INIT()`マクロ
+（`napi_register_module_v1`相当を展開する）を使う。
+
+**`native/napi_shim.c`のヘルパー関数**:
+- `conduit_string_arg`: コールバックの第1引数をUTF-8文字列として読む。
   Node-APIの標準的な2回呼び出しパターン（`napi_get_value_string_utf8`を
   まず`buf=NULL, bufsize=0`で呼んで必要バイト数を取得し、その後バッファを
-  確保して再度呼ぶ）に従う。
-- `applyStart`: `configJSON`をパースし、既存のmanagerがあれば`StopAll`して
-  から新しいmanagerに置き換えて`Apply`する（＝1プロセス1relay、2回目の
-  `start`は1回目を置き換える設計。前述のとおり意図的）。
-- `applyReload`: 既存のmanagerに新しい設定を`Apply`する。managerが
-  存在しない場合はエラーを返す。
-- `conduitStart`/`conduitReload`が返す空文字列は成功を意味する（ADR記載の
-  「エラーは`start`の同期的な戻り値で通知する」設計の実体）。
-- `main()`は`package main`に必要なだけの空実装。`-buildmode=c-shared`では
-  実行されない（アドオンはexportされたN-API関数経由でのみ駆動される）が、
-  これがないと（buildmode指定なしの）`go build -tags=napi`単体が失敗する。
+  確保して再度呼ぶ）に従う。旧`main_napi.go`の`firstStringArg`（Go実装）
+  をCへ直訳したもの。
+- `conduit_result`: `libconduitcore.so`が返す生ポインタ（`NULL`/malloc済み
+  エラー文字列）をJS文字列（成功時`""`、失敗時エラー文字列）へ変換する。
+  非`NULL`の場合はJS文字列を作った後に`free()`する（Go側の`C.CString`が
+  確保した領域を、この関数が解放する）。
+- `Start`/`Reload`: `conduit_string_arg`で引数を読み、`ConduitStart`/
+  `ConduitReload`を呼び、`conduit_result`で変換して返す。読み取った
+  引数バッファは呼び出し後に`free()`する。
+- `Stop`: `ConduitStop()`を呼び、`napi_get_undefined`を返す。
+
+**`native/cli.c`の構造**: 旧`main.go`のCONFIG_FILE読込・
+SIGHUP/SIGTERM/SIGINT処理をCで再現する。`readConfigFile`
+（`fopen`/`fseek`/`ftell`/`fread`/`fclose`でファイル全体をヒープバッファへ
+読む）を起動時と各SIGHUP時の両方で使う。シグナル配送は
+`signal()`/シグナルハンドラ内での処理ではなく、`sigprocmask(SIG_BLOCK,
+...)`で事前にSIGHUP/SIGTERM/SIGINTをブロックし、メインループで
+`sigwait()`により同期的に1つずつ受け取る設計にした（非同期シグナル
+ハンドラ内でGoランタイムへの呼び出しや`exit()`を行う
+async-signal-safety上のリスクを避けるため。ハンドラ内で処理する
+古典的な自前ポーリング/self-pipeパターンより単純かつ「取り逃し」の
+競合が原理的に発生しない）。SIGHUPで`reload`（未`start`ならまず
+`ConduitStart`、既に`started`なら`ConduitReload`）、SIGTERM/SIGINTで
+`ConduitStop()`を呼んで`return 0`する。`started`フラグは
+`ConduitStart`が`NULL`（成功）を返した時にのみ立てる
+（設定ファイルのパース失敗等で`ConduitStart`がエラーを返した場合は
+managerが作られていないため、次のSIGHUPは`ConduitReload`ではなく
+再度`ConduitStart`を呼ぶ必要がある）。
+
+`main_core.go`の`func main() {}`は`package main`に必要なだけの空実装で
+（`-buildmode=c-shared`では実行されず、`libconduitcore.so`はexportされた
+C ABI関数経由でのみ駆動される）、これが無いと`go build -tags=core`単体が
+失敗する。
 
 - `internal/relay`・`cmd/conduit/main.go`の書き換えがほぼ不要になり、
   wasip1移行で見込まれていた大規模な並行モデル書き換え・WebSocket自前実装
@@ -297,7 +454,12 @@ Goの`//export`シンボルのアドレスをCから取る必要があるため�
   再度の`start`は前のものを置き換える」という単一インスタンス設計である
   点に注意。
 
-### 実装状況（本ADR記載後に追記）
+### 実装状況（本ADR記載後に追記、v1時点の記録。3成果物split前）
+
+**この節はv1（`main.go`実行体 + `main_napi.go`の`.node`という「別々のGo
+成果物2つ」設計）時点の記録であり、後述「方針転換2」で説明した
+segfaultの発覚によりこの設計は破棄された。歴史的経緯として残す
+（「main_napi.go」への言及はすべて削除済みファイルを指す）。**
 
 v1の実装は完了し、以下を本開発環境（Bun 1.3.14、linux-x64）で確認済み。
 
@@ -362,6 +524,52 @@ v1の実装は完了し、以下を本開発環境（Bun 1.3.14、linux-x64）�
   ビルド（`go build ./cmd/conduit`）と`napi`タグ+`c-shared`ビルドの両方が
   引き続き成功することを確認済み。
 
+### 実装状況2（「方針転換2」3成果物split後に追記）
+
+上記v1設計のsegfault発覚を受け、「方針転換2」節の設計へ移行した。
+本開発環境（linux-x64、go 1.26.4、gcc 15.2.0）で以下を確認済み。
+
+- `cmd/conduit/main.go`: ビルドタグを`//go:build !js && !napi`から
+  `//go:build !core`へ変更（`main_js.go`は既に削除済みのため`!js`は不要、
+  `main_napi.go`削除・`main_core.go`追加に伴い`!napi`を`!core`へ置換）。
+- `cmd/conduit/main_napi.go`を削除。
+- `cmd/conduit/main_core.go`（`//go:build core`）を新規作成。旧
+  `main_napi.go`の`parseConfigs`/`applyStart`/`applyReload`/
+  `mgrMu`/`mgr`をそのまま移植し、`ConduitStart`/`ConduitStop`/
+  `ConduitReload`という生C ABIをexportする。
+- `packages/conduit-relay/native/napi_shim.c`・`native/cli.c`を新規作成
+  （pure C、Goゼロ）。
+- `packages/conduit-relay/scripts/build.ts`を全面書き換え: Go core
+  ライブラリのビルド→（tsc、napi shimのgccビルド、cliのgccビルドを並列
+  実行）→`libconduitcore.h`の削除、という順で実行する。旧
+  `scripts/build.sh`は削除し、`package.json`の`build`スクリプトを
+  `bun run scripts/build.ts`に変更。
+- `packages/conduit-relay/src/loader.ts`の`getBindingPath()`を、
+  `.node`と同じパスを返す不具合（今回のsegfaultの直接原因）から
+  拡張子なしの実行体パス（`conduit.${platform}-${arch}`、
+  optionalDependencyフォールバックも同様）を返すよう修正。`getBinding()`
+  （`.node`用）は無変更。
+- `packages/conduit-relay/src/cli.ts`を、直接`spawn(join(dirname,
+  "./conduit"))`していた実装から`spawn(await getBindingPath(), ...)`に
+  変更（`loader.ts`経由でプラットフォーム別実行体パスを解決するよう
+  統一）。`src/index.ts`は無変更。
+- ビルド確認: `bun run build`が exit 0 で完了し、`dist/`に
+  `libconduitcore.so`・`conduit.linux-x64.node`・`conduit.linux-x64`
+  （拡張子なし）の3ファイルが生成されることを確認。`readelf -d`で
+  両C成果物が`NEEDED libconduitcore.so`と`RUNPATH`の先頭に`$ORIGIN`
+  （リテラル、シェルクオート無し）を持つことを確認（`-Wl,-rpath,$ORIGIN`
+  が正しく効いている証跡）。
+- **今回のバグの再現確認**: `CONFIG_FILE=/nonexistent
+  ./dist/conduit.linux-x64`を直接実行し、以前のようにsegfaultせず
+  「config read: failed to read /nonexistent」を標準エラーに出して
+  正常に起動（シグナル待ち）することを確認した（ごく簡易な確認であり、
+  下記オープン項目のSIGHUP/SIGTERM連続配送の確認はまだ行っていない）。
+- **未検証（次フェーズ）**: `require()`による`.node`ロード、
+  `start`/`stop`/`reload`のライフサイクル、実relayのgoroutineパスの
+  residency、実際のDiscord Gateway/Cloudflare Workerへの接続——これらは
+  いずれもv1時点の未検証事項と同様に、3成果物split後の構成でも
+  未検証のまま持ち越し。
+
 ### 起床後に確認すべきこと（優先順）
 
 1. **Node.js本体での動作確認**（本ADRの採用理由そのものが未検証）:
@@ -369,7 +577,14 @@ v1の実装は完了し、以下を本開発環境（Bun 1.3.14、linux-x64）�
    相当がエラーなく通るか。次に`packages/conduit-relay/dist/index.js`を
    Node.js本体からimportし、上記と同じ`start`/`reload`/`stop`の
    スモークテストが通るか。
-2. **`status: "active"`のBotを最低1つ含む設定でaddonを起動し、実relayの
+2. **`native/cli.c`のシグナル処理が現実的な連続配送に耐えるかの再検証**:
+   本ADRのtoy prototype（「方針転換2」節の(b)）ではSIGHUPを1回配送する
+   ケースしか検証していない。SIGHUP→SIGHUP→SIGTERMのように複数の
+   シグナルを連続して送った場合に、reloadが2回とも正しく発火し
+   （1回目・2回目とも`started`が正しく更新され、`ConduitReload`が
+   呼ばれる）、stopが1回だけ発火し、クラッシュや同じCエラー文字列ポインタ
+   の二重`free()`が発生しないことを実機で確認する。
+3. **`status: "active"`のBotを最低1つ含む設定でaddonを起動し、実relayの
    goroutineパス（`internal/relay`の`botRun`、`net.Dial`、
    `coder/websocket`のブロッキングRead）がNAPIアドオン内で実際に動作し、
    JSがアイドルの間も自律的に進行し続けることを確認する。** 本ADRで
@@ -378,10 +593,10 @@ v1の実装は完了し、以下を本開発環境（Bun 1.3.14、linux-x64）�
    行えないため、モックのWebSocketサーバー等を用意する必要がある）。
    その上で実際のDiscord Gateway/Cloudflare WorkerへのWebSocket接続も
    確認する。
-3. 作業ツリーに残っている雑多な差分（`.gitignore`, `biome.json`の
+4. 作業ツリーに残っている雑多な差分（`.gitignore`, `biome.json`の
    `useGlobalThis`ルール等）が意図通りか確認し、問題なければコミットする
    （本セッションはVCS書き込み操作の権限を持たないため、コミットは
    ユーザー自身が行う必要がある）。
-4. 多プラットフォーム配布（`optionalDependencies`によるプラットフォーム別
+5. 多プラットフォーム配布（`optionalDependencies`によるプラットフォーム別
   `.node`分割）は本ADRのスコープ外のまま。単一VM運用を超えて配布する
   場合は改めて設計が必要。

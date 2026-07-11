@@ -1,4 +1,4 @@
-//go:build !js && !napi
+//go:build !core
 
 package main
 

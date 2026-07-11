@@ -1,6 +1,6 @@
-import { stat } from "fs/promises"
-import { createRequire } from "module"
-import { join } from "path"
+import { stat } from "node:fs/promises"
+import { createRequire } from "node:module"
+import { join } from "node:path"
 
 export interface ConduitAddon {
   start: (configJSON: string) => string
@@ -58,7 +58,7 @@ async function exists(path: string) {
   try {
     await stat(path)
     return true
-  } catch (err) {
+  } catch {
     return false
   }
 }
@@ -66,21 +66,19 @@ async function exists(path: string) {
 export async function getBindingPath() {
   const bindingPath = join(
     import.meta.dirname,
-    `./conduit.${process.platform}-${process.arch}.node`
+    `./conduit.${process.platform}-${process.arch}`
   )
   if (await exists(bindingPath)) {
     return bindingPath
   }
   const bindingPackage = `@conduit-relay/conduit-${process.platform}-${process.arch}`
   try {
-    const bindingPath = nativeRequire.resolve(
-      `${bindingPackage}/dist/conduit.${process.platform}-${process.arch}.node`
+    const resolvedBindingPath = nativeRequire.resolve(
+      `${bindingPackage}/dist/conduit.${process.platform}-${process.arch}`
     )
     validateVersion(bindingPackage)
-    return bindingPath
-  } catch (err) {
-    throw new Error(
-      `Cannot find binding ${process.platform}-${process.arch}.node`
-    )
+    return resolvedBindingPath
+  } catch {
+    throw new Error(`Cannot find binding ${process.platform}-${process.arch}`)
   }
 }

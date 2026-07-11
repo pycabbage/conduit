@@ -6,11 +6,15 @@ CLI（`npx conduit-relay`）とライブラリ（`start`/`stop`/`reload`）の�
 
 ## Build
 
-要Go・Bun。`dist/`はビルド成果物でgit管理外のため、使用前に必ず実行する。
+要Go・gcc・Bun。`dist/`はビルド成果物でgit管理外のため、使用前に必ず実行する。
 
 ```bash
-bash scripts/build.sh
+bun run build
 ```
+
+`dist/libconduitcore.so`（Go core、`-buildmode=c-shared`）・
+`dist/conduit.<platform>-<arch>.node`（Node-APIアドオン、require用）・
+`dist/conduit.<platform>-<arch>`（拡張子なしのCLI実行体、spawn用）の3成果物を生成する。
 
 ## CLI
 

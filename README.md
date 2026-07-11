@@ -13,21 +13,23 @@ See [`example/config.sample.jsonc`](example/config.sample.jsonc) for the configu
 
 ## npm / npx (Node.js)
 
-conduit's core relay logic is also built as a native Node.js addon (`.node`) and published for Node.js as [`packages/conduit-relay`](packages/conduit-relay), usable both as a CLI and as a library. This is the same relay loop as the native binary above -- just a different entrypoint (see `cmd/conduit/main.go` vs `cmd/conduit/main_napi.go`).
+conduit's core relay logic is also built as a native Node.js addon (`.node`) and published for Node.js as [`packages/conduit-relay`](packages/conduit-relay), usable both as a CLI and as a library. This is the same relay loop as the native binary above -- just a different entrypoint (see `cmd/conduit/main.go` vs `cmd/conduit/main_core.go`).
 
 ```bash
 cd packages/conduit-relay
-bash scripts/build.sh   # builds dist/conduit.node, dist/*.js, dist/*.d.ts (requires a local Go toolchain and Bun)
+bun run build   # builds dist/libconduitcore.so, dist/conduit.<platform>-<arch>.node, dist/conduit.<platform>-<arch> (requires a local Go toolchain, gcc, and Bun)
 
 CONFIG_FILE=/etc/conduit/config.json npx conduit-relay
 ```
 
 ```js
-import { start, stop, reload } from 'conduit-relay';
+import { conduit } from 'conduit-relay';
 
-await start(configArrayOrJSONCString);
-await reload(updatedConfig);
-await stop();
+const err = conduit.start(JSON.stringify(configArray)); // or a JSONC string
+if (err) throw new Error(err);
+
+conduit.reload(JSON.stringify(updatedConfigArray));
+conduit.stop();
 ```
 
 Requires Node.js >= 22 (for the stable global `WebSocket` client conduit's outgoing Gateway/Worker connections rely on). See [`packages/conduit-relay/README.md`](packages/conduit-relay/README.md) for details.
