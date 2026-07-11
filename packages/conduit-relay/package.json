@@ -13,7 +13,7 @@
     "README.md"
   ],
   "scripts": {
-    "build": "bash scripts/build.sh",
+    "build": "bun run scripts/build.ts",
     "lint": "biome check"
   },
   "devDependencies": {

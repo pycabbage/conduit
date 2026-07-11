@@ -15,7 +15,17 @@ rm -rf "$PACKAGE_ROOT/dist"
   bun tsc
 )
 
-# 2. Build the native Node-API addon (primary runtime; see ADR 0009).
+# 2. Build the native CLI binary (used by `npx conduit-relay` via cli.ts, which
+#    just spawns it; see ADR 0009). This is the plain, tag-free native build of
+#    cmd/conduit/main.go — it reads CONFIG_FILE and handles SIGHUP/SIGTERM/SIGINT
+#    itself, so the TS launcher stays trivial. CGO is disabled (no cgo here,
+#    unlike the addon below).
+(
+  cd "$REPO_ROOT"
+  CGO_ENABLED=0 go build -o "$PACKAGE_ROOT/dist/conduit" ./cmd/conduit
+)
+
+# 3. Build the native Node-API addon (library runtime; see ADR 0009).
 #    node_api.h is provided by the node-api-headers npm package. Resolve its
 #    include directory at build time so no environment-specific path is baked
 #    into the repo (ADR 0009). Resolve from PACKAGE_ROOT so the package's own

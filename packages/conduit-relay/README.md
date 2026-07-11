@@ -22,12 +22,19 @@ CONFIG_FILE=/etc/conduit/config.json npx conduit-relay
 
 ## Library
 
-```js
-import { start } from 'conduit-relay';
+`conduit` はネイティブアドオン（`.node`）の生exportをそのまま公開する。
+`start`/`reload` は設定JSON(C)文字列を受け取り、成功時は空文字列、失敗時は
+エラーメッセージ文字列を返す（例外はthrowしない）。エラーで例外にしたい場合は
+呼び出し側で戻り値をチェックする。
 
-const relay = await start(configArrayOrJSONCString);
-await relay.reload(updatedConfig);
-await relay.stop();
+```js
+import { conduit } from 'conduit-relay';
+
+const err = conduit.start(JSON.stringify(configArray)); // or a JSONC string
+if (err) throw new Error(err);
+
+conduit.reload(JSON.stringify(updatedConfigArray));
+conduit.stop();
 ```
 
 設計判断の詳細は [`docs/adr/0006`](../../docs/adr/0006-relay-wasm-cmd-layout.md)・
