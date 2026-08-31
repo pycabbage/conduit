@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"net/http"
 	"strconv"
 	"sync"
 	"time"
@@ -14,11 +15,12 @@ import (
 )
 
 type BotConfig struct {
-	ID          string `json:"id"`
-	Token       string `json:"token"`
-	Status      string `json:"status"`
-	Intents     int    `json:"intents"`
-	WorkerWSURL string `json:"worker_ws_url"`
+	ID           string `json:"id"`
+	Token        string `json:"token"`
+	Status       string `json:"status"`
+	Intents      int    `json:"intents"`
+	WorkerWSURL  string `json:"worker_ws_url"`
+	WorkerSecret string `json:"worker_secret"`
 }
 
 type sessInfo struct {
@@ -59,7 +61,11 @@ func runOnce(ctx context.Context, cfg BotConfig, sess *sessInfo) error {
 	defer func() { _ = dc.Close(websocket.StatusNormalClosure, "") }()
 	dc.SetReadLimit(1 << 20)
 
-	wc, _, err := websocket.Dial(ctx, cfg.WorkerWSURL, nil)
+	wc, _, err := websocket.Dial(ctx, cfg.WorkerWSURL, &websocket.DialOptions{
+		HTTPHeader: http.Header{
+			"Authorization": []string{"Bearer " + cfg.WorkerSecret},
+		},
+	})
 	if err != nil {
 		return err
 	}

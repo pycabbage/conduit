@@ -20,6 +20,10 @@
     // WebSocket URL of the Worker that receives forwarded events (/gateway endpoint).
     "worker_ws_url": "wss://my-worker.my-subdomain.workers.dev/gateway",
 
+    // Shared secret sent as "Authorization: Bearer <worker_secret>" on connect.
+    // Must match the value registered on the Worker via `wrangler secret put CONDUIT_SECRET`.
+    "worker_secret": "REPLACE_WITH_A_LONG_RANDOM_STRING",
+
     // Gateway Intents as a bitfield (integer).
     // Common values (combine with bitwise OR):
     //   GUILDS            =      1  (0x0001)
@@ -38,6 +42,7 @@
     "token": "Bot AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
     "status": "active",
     "worker_ws_url": "wss://other-worker.my-subdomain.workers.dev/gateway",
+    "worker_secret": "REPLACE_WITH_A_LONG_RANDOM_STRING",
     "intents": 513 // GUILDS + GUILD_MESSAGES only
   },
 
@@ -47,6 +52,7 @@
     "token": "Bot BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
     "status": "paused", // "paused" -> conduit will not establish a connection for this bot
     "worker_ws_url": "wss://my-worker.my-subdomain.workers.dev/gateway",
+    "worker_secret": "REPLACE_WITH_A_LONG_RANDOM_STRING",
     "intents": 513
   }
 ]

@@ -7,6 +7,11 @@ export default {
     if (url.pathname !== "/gateway") {
       return new Response("Not Found", { status: 404 })
     }
+    if (
+      request.headers.get("Authorization") !== `Bearer ${env.CONDUIT_SECRET}`
+    ) {
+      return new Response("Unauthorized", { status: 401 })
+    }
     const id = env.CONDUIT_DO.idFromName("bot")
     return env.CONDUIT_DO.get(id).fetch(request)
   },
@@ -42,7 +47,10 @@ export class ConduitDO extends DurableObject {
     return new Response(null, { status: 101, webSocket: client })
   }
 
-  async webSocketMessage(_ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
+  async webSocketMessage(
+    _ws: WebSocket,
+    message: string | ArrayBuffer
+  ): Promise<void> {
     const text = typeof message === "string" ? message : decoder.decode(message)
     const raw = JSON.parse(text) as unknown
 
@@ -57,13 +65,17 @@ export class ConduitDO extends DurableObject {
     if (payload.t === "MESSAGE_CREATE") {
       const d = payload.d as { content?: string; channel_id?: string } | null
       if (d?.content === "!ping" && d.channel_id) {
-        const token = this.token ?? await this.ctx.storage.get<string>("token")
+        const token =
+          this.token ?? (await this.ctx.storage.get<string>("token"))
         if (!token) return
         await fetch(
           `https://discord.com/api/v10/channels/${d.channel_id}/messages`,
           {
             method: "POST",
-            headers: { "Content-Type": "application/json", Authorization: token },
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: token,
+            },
             body: JSON.stringify({ content: "Pong!" }),
           }
         )

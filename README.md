@@ -11,6 +11,8 @@ CONFIG_FILE=/etc/conduit/config.json ./conduit
 
 See [`example/config.sample.jsonc`](example/config.sample.jsonc) for the configuration format.
 
+When deploying the Worker, register the same shared secret conduit sends as `worker_secret` via `wrangler secret put CONDUIT_SECRET` (see `docs/adr/0011-conduit-worker-shared-secret-auth.md`).
+
 <details>
 <summary>Core Concepts</summary>
 
