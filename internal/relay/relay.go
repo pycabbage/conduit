@@ -28,6 +28,39 @@ type sessInfo struct {
 	seq           *int
 }
 
+type initMessage struct {
+	Type  string `json:"type"`
+	Token string `json:"token"`
+}
+
+type identifyProperties struct {
+	OS      string `json:"os"`
+	Browser string `json:"browser"`
+	Device  string `json:"device"`
+}
+
+type identifyData struct {
+	Token      string             `json:"token"`
+	Intents    int                `json:"intents"`
+	Properties identifyProperties `json:"properties"`
+}
+
+type identifyPayload struct {
+	Op int          `json:"op"`
+	D  identifyData `json:"d"`
+}
+
+type resumeData struct {
+	Token     string `json:"token"`
+	SessionID string `json:"session_id"`
+	Seq       *int   `json:"seq"`
+}
+
+type resumePayload struct {
+	Op int        `json:"op"`
+	D  resumeData `json:"d"`
+}
+
 func botRun(ctx context.Context, cfg BotConfig) {
 	var sess sessInfo
 	for {
@@ -72,7 +105,7 @@ func runOnce(ctx context.Context, cfg BotConfig, sess *sessInfo) error {
 	defer func() { _ = wc.Close(websocket.StatusNormalClosure, "") }()
 	wc.SetReadLimit(1 << 20)
 
-	initMsg, _ := json.Marshal(map[string]any{"type": "init", "token": cfg.Token})
+	initMsg, _ := json.Marshal(initMessage{Type: "init", Token: cfg.Token})
 	if err := wc.Write(ctx, websocket.MessageText, initMsg); err != nil {
 		return err
 	}
@@ -152,15 +185,15 @@ func runOnce(ctx context.Context, cfg BotConfig, sess *sessInfo) error {
 			}(time.Duration(hello.HeartbeatInterval) * time.Millisecond)
 
 			if sess.id != "" {
-				b, _ := json.Marshal(map[string]any{"op": 6, "d": map[string]any{
-					"token": cfg.Token, "session_id": sess.id, "seq": sess.seq,
+				b, _ := json.Marshal(resumePayload{Op: 6, D: resumeData{
+					Token: cfg.Token, SessionID: sess.id, Seq: sess.seq,
 				}})
 				log.Printf("bot %s: resuming session %s", cfg.ID, sess.id)
 				discordWrite(ctx, dc, &mu, b)
 			} else {
-				b, _ := json.Marshal(map[string]any{"op": 2, "d": map[string]any{
-					"token": cfg.Token, "intents": cfg.Intents,
-					"properties": map[string]string{"os": "linux", "browser": "conduit", "device": "conduit"},
+				b, _ := json.Marshal(identifyPayload{Op: 2, D: identifyData{
+					Token: cfg.Token, Intents: cfg.Intents,
+					Properties: identifyProperties{OS: "linux", Browser: "conduit", Device: "conduit"},
 				}})
 				log.Printf("bot %s: identifying", cfg.ID)
 				discordWrite(ctx, dc, &mu, b)
